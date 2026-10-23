@@ -121,7 +121,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         menu = Gio.Menu()
         menu.append("Preferences", "app.preferences")
-        menu.append("About Datawatch", "app.about")
+        menu.append("About Data Monitor", "app.about")
         menu.append("Quit", "app.quit")
         menu_button = Gtk.MenuButton(
             icon_name="open-menu-symbolic",
@@ -265,7 +265,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.history_empty = Adw.StatusPage(
             title="No usage recorded yet",
-            description="Datawatch samples your interfaces every couple of seconds. "
+            description="Data Monitor samples your interfaces every couple of seconds. "
             "Come back once some traffic has flowed.",
         )
         self.history_empty.set_vexpand(True)
@@ -572,7 +572,7 @@ class MainWindow(Adw.ApplicationWindow):
         note.set_body(body)
         if priority is not None:
             note.set_priority(priority)
-        note.add_button("Open Datawatch", "app.activate")
+        note.add_button("Open Data Monitor", "app.activate")
         try:
             app.send_notification(nid, note)
         except Exception:  # pragma: no cover - no notification daemon
@@ -863,7 +863,7 @@ class MainWindow(Adw.ApplicationWindow):
                     "background",
                     f"{APP_NAME} is still monitoring",
                     "Usage keeps being recorded in the background. "
-                    "Run “datawatch” again to reopen the dashboard.",
+                    "Run “datamonitor” again to reopen the dashboard.",
                 )
             return True
         app = self.get_application()

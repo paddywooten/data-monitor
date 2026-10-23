@@ -20,7 +20,7 @@ from .storage import Storage  # noqa: E402
 from .window import MainWindow  # noqa: E402
 
 
-class DatawatchApp(Adw.Application):
+class DataMonitorApp(Adw.Application):
     def __init__(
         self,
         start_hidden: bool = False,
@@ -87,7 +87,7 @@ class DatawatchApp(Adw.Application):
         about = Adw.AboutWindow(
             transient_for=self.window,
             application_name=APP_NAME,
-            application_icon="datawatch",
+            application_icon="datamonitor",
             developer_name="Patrick",
             version=__version__,
             comments=(
@@ -104,7 +104,7 @@ class DatawatchApp(Adw.Application):
     def _notify_background(self) -> None:
         note = Gio.Notification.new(f"{APP_NAME} is running in the background")
         note.set_body("The dashboard is hidden but usage keeps being recorded. "
-                      "Run “datawatch” again to open it.")
+                      "Run “datamonitor” again to open it.")
         note.add_button("Open dashboard", "app.activate")
         try:
             self.send_notification("background", note)
@@ -117,7 +117,7 @@ class DatawatchApp(Adw.Application):
         note.set_body(body)
         if urgent:
             note.set_priority(Gio.NotificationPriority.URGENT)
-        note.add_button("Open Datawatch", "app.activate")
+        note.add_button("Open Data Monitor", "app.activate")
         try:
             self.send_notification(nid, note)
         except Exception:  # pragma: no cover - no notification daemon
@@ -147,7 +147,7 @@ class DatawatchApp(Adw.Application):
 
     def do_shutdown(self) -> None:
         try:
-            # Never leave apps frozen when Datawatch exits.
+            # Never leave apps frozen when Data Monitor exits.
             self.enforcer.shutdown()
         except Exception:  # pragma: no cover
             pass
@@ -166,6 +166,6 @@ class DatawatchApp(Adw.Application):
 
 
 def run(argv: list[str] | None = None) -> int:
-    """Convenience entry point (``datawatch.application.run()``)."""
-    app = DatawatchApp()
+    """Convenience entry point (``datamonitor.application.run()``)."""
+    app = DataMonitorApp()
     return app.run(argv)

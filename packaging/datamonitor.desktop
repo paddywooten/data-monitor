@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Data Monitor
+GenericName=Internet data usage monitor
+Comment=Track download and upload totals, live speeds, data quotas and per-app usage
+Exec=@EXEC@
+Icon=datamonitor
+Terminal=false
+Categories=Network;Monitor;System;
+Keywords=internet;data;usage;quota;bandwidth;traffic;monitor;network;meter;
+StartupNotify=true
+StartupWMClass=io.datamonitor.App
+X-GNOME-UsesNotifications=true

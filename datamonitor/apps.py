@@ -1,7 +1,7 @@
 """The Apps page: top data consumers, per-app limits and whitelisting.
 
-The numbers come from :mod:`datawatch.apptrack` (TCP socket counters);
-enforcement (pause / resume) lives in :mod:`datawatch.enforce`.
+The numbers come from :mod:`datamonitor.apptrack` (TCP socket counters);
+enforcement (pause / resume) lives in :mod:`datamonitor.enforce`.
 Whitelisted apps are never paused, whatever their limits say.
 """
 

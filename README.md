@@ -1,4 +1,4 @@
-# Datawatch
+# Data Monitor
 
 A small internet **data usage monitor** for your laptop.
 
@@ -16,7 +16,7 @@ weeks of history and warns you before you burn through a monthly quota.
   the biggest consumers on a dedicated **Apps** tab (TCP sockets via `ss`,
   still no root and no packet capture).
 - **Restrictions** — give an app its own daily/cycle limit, and/or set an
-  overall cap; when a limit is hit Datawatch can *pause* the app (freeze it
+  overall cap; when a limit is hit Data Monitor can *pause* the app (freeze it
   with `SIGSTOP` until the reset) instead of only notifying you.
 - **Whitelists** — exempt critical apps (SSH, video calls, …) from every
   automatic pause: neither their own limits nor the overall cap ever freeze
@@ -26,7 +26,7 @@ weeks of history and warns you before you burn through a monthly quota.
 - **Per-interface breakdown** — Wi-Fi, Ethernet, VPN, tethering: see and choose
   what counts toward your limits.
 - **Background monitoring** — close the window and it keeps recording; run
-  `datawatch` again to bring the dashboard back.
+  `datamonitor` again to bring the dashboard back.
 - **Starts at login** (optional), auto-dark/light following your desktop.
 
 Built with GTK 4 + libadwaita, so it looks native next to your other apps.
@@ -71,6 +71,8 @@ cd data-monitor
 
 (`./install.sh` copies the app into `~/.local`, so the clone can be deleted
 afterwards — or kept for updates: `cd data-monitor && git pull && ./install.sh`.)
+Upgrading from an older install migrates your settings and history
+automatically.)
 
 Other options:
 
@@ -81,30 +83,31 @@ Other options:
 ./install.sh --help
 ```
 
-Then either click **Datawatch** in your application menu or run:
+Then either click **Data Monitor** in your application menu or run:
 
 ```bash
-datawatch
+datamonitor
 ```
 
 ## Run straight from the source tree
 
 ```bash
-python3 -m datawatch
+python3 -m datamonitor
 ```
 
 ## Command line
 
 ```
-datawatch                 open the dashboard
-datawatch --hidden        start in the background (window hidden)
-datawatch --page apps     open on a tab: overview | history | apps | interfaces
-datawatch --settings      open Preferences on start
-datawatch --version
+datamonitor                 open the dashboard
+datamonitor --hidden        start in the background (window hidden)
+datamonitor --page apps     open on a tab: overview | history | apps | interfaces
+datamonitor --settings      open Preferences on start
+datamonitor --version
 ```
 
-Launching `datawatch` while it already runs simply brings the window back —
-that is the documented way to reopen the background instance.
+Launching `datamonitor` while it already runs simply brings the window back —
+that is the documented way to reopen the background instance. (Installs up to
+v1.1 used the `datawatch` command; it remains as an alias.)
 
 ---
 
@@ -136,7 +139,7 @@ row:
 
 When something is paused you get a banner (*N apps paused — limit reached* with
 **Resume all**), a red *Paused — …* status on the row, and a desktop
-notification. Datawatch never leaves an app frozen: quitting it resumes
+notification. Data Monitor never leaves an app frozen: quitting it resumes
 everything, and limits are re-checked every few seconds.
 
 **Interfaces** — each adapter with its kind, link state, current rate, and
@@ -197,26 +200,27 @@ that is how ISPs quote quotas; speeds use bits (`Mbps`).
   other users and protocol overhead land in **Other**. Loopback is skipped
   unless you track `lo`.
 - Pausing uses plain `SIGSTOP`/`SIGCONT` on the app's **own process tree**:
-  your user only — never other users' processes, never Datawatch itself or
+  your user only — never other users' processes, never Data Monitor itself or
   its launcher tree. Each stopped pid is recorded with its `/proc` start time,
   so a recycled pid can never be resumed by mistake.
 - The enforcer re-checks every 5 s and is idempotent: whitelist an app and it
   resumes within seconds; hitting *Resume now* holds until the next day;
-  turning tracking off, or quitting Datawatch, resumes everything.
+  turning tracking off, or quitting Data Monitor, resumes everything.
 
 ### Files
 
 | Path | Contents |
 |---|---|
-| `~/.config/datawatch/config.json` | settings — limits, actions, per-app limits, whitelist |
-| `~/.local/share/datawatch/history.sqlite3` | usage history |
-| `~/.local/share/datawatch/datawatch/` | installed copy of the app |
-| `~/.local/bin/datawatch` | launcher |
-| `~/.local/share/applications/io.datawatch.App.desktop` | menu entry |
-| `~/.config/autostart/datawatch.desktop` | login autostart |
+| `~/.config/datamonitor/config.json` | settings — limits, actions, per-app limits, whitelist |
+| `~/.local/share/datamonitor/history.sqlite3` | usage history |
+| `~/.local/share/datamonitor/datamonitor/` | installed copy of the app |
+| `~/.local/bin/datamonitor` | launcher (`datawatch` kept as alias) |
+| `~/.local/share/applications/io.datamonitor.App.desktop` | menu entry |
+| `~/.config/autostart/datamonitor.desktop` | login autostart |
 
-Set `DATAWATCH_CONFIG_HOME` / `DATAWATCH_DATA_HOME` to point the app at
-different directories (used for testing or a portable install).
+Set `DATAMONITOR_CONFIG_HOME` / `DATAMONITOR_DATA_HOME` to point the app at
+different directories (used for testing or a portable install). The older
+`DATAWATCH_CONFIG_HOME` / `DATAWATCH_DATA_HOME` names still work.
 
 ---
 
@@ -234,17 +238,17 @@ make sure `ss` is installed (`iproute2`). If much of your usage sits in
 *Other*, that is UDP/QUIC or another user's traffic: attribution is TCP-only
 by design.
 
-**An app stayed paused** — shouldn't happen (Datawatch resumes everything on
+**An app stayed paused** — shouldn't happen (Data Monitor resumes everything on
 quit), but you can always SIGCONT it yourself or use **Resume all** in the
-Apps tab after starting `datawatch`.
+Apps tab after starting `datamonitor`.
 
 **No notifications** — the desktop needs a notification daemon (KDE and GNOME
 have one). You can turn them off entirely in Preferences; the banner always
 works.
 
 **The window is gone but it is "running"** — that is background mode. Run
-`datawatch` again, or click the *Open Datawatch* button on the notification.
-Stop it for good from the menu (**⋮ → Quit**, `Ctrl+Q`).
+`datamonitor` again, or click the *Open Data Monitor* button on the
+notification. Stop it for good from the menu (**⋮ → Quit**, `Ctrl+Q`).
 
 **Wrong window class / icon** — run `./install.sh` again after moving the
 project; the generated launcher and desktop entry reference absolute paths.

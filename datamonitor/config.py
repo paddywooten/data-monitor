@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-APP_NAME = "datawatch"
+APP_NAME = "datamonitor"
 
 DEFAULTS: dict[str, Any] = {
     # Interfaces to count.  Empty list == "every interface except loopback".
@@ -59,7 +59,9 @@ _STR_CHOICES = {
 
 
 def config_dir() -> str:
-    override = os.environ.get("DATAWATCH_CONFIG_HOME")
+    override = os.environ.get("DATAMONITOR_CONFIG_HOME") or os.environ.get(
+        "DATAWATCH_CONFIG_HOME"  # legacy name (<= 1.1)
+    )
     if override:
         return os.path.expanduser(override)
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
@@ -71,7 +73,9 @@ def config_path() -> str:
 
 
 def data_dir() -> str:
-    override = os.environ.get("DATAWATCH_DATA_HOME")
+    override = os.environ.get("DATAMONITOR_DATA_HOME") or os.environ.get(
+        "DATAWATCH_DATA_HOME"  # legacy name (<= 1.1)
+    )
     if override:
         return os.path.expanduser(override)
     base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")

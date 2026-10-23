@@ -10,7 +10,7 @@ few seconds and brings reality in line with the configured rules:
 
 The stopped pid sets are recorded in SQLite together with each pid's
 ``/proc`` starttime, so pid reuse can never resume a stranger - and a
-restarted Datawatch can resume (or re-assert) what the previous run
+restarted Data Monitor can resume (or re-assert) what the previous run
 paused.  Whitelisted apps are never touched.
 """
 
@@ -219,7 +219,7 @@ class Enforcer:
                 self.storage.state_set(f"resume:{app}", util.day_key(time.time()))
 
     def shutdown(self) -> None:
-        """Never leave apps frozen when Datawatch exits."""
+        """Never leave apps frozen when Data Monitor exits."""
         for app, rec in self.paused().items():
             self._resume(app, rec)
 

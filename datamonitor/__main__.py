@@ -1,4 +1,4 @@
-"""``python -m datawatch`` entry point."""
+"""``python -m datamonitor`` entry point."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import argparse
 import sys
 
 from . import APP_NAME, __version__
-from .application import DatawatchApp
+from .application import DataMonitorApp
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="datawatch",
+        prog="datamonitor",
         description=f"{APP_NAME} - internet data usage monitor",
     )
     parser.add_argument(
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args, rest = parser.parse_known_args(argv)
 
-    app = DatawatchApp(
+    app = DataMonitorApp(
         start_hidden=args.hidden,
         start_page=args.page,
         open_settings=args.settings,
