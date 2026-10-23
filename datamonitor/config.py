@@ -1,9 +1,10 @@
-"""Configuration handling (a small JSON file in ``$XDG_CONFIG_HOME``)."""
+"""Configuration handling (a small JSON file per platform config dir)."""
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any
 
 APP_NAME = "datamonitor"
@@ -64,7 +65,12 @@ def config_dir() -> str:
     )
     if override:
         return os.path.expanduser(override)
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    if sys.platform.startswith("win"):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Preferences")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return os.path.join(base, APP_NAME)
 
 
@@ -78,7 +84,12 @@ def data_dir() -> str:
     )
     if override:
         return os.path.expanduser(override)
-    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     return os.path.join(base, APP_NAME)
 
 

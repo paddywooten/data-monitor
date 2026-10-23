@@ -9,7 +9,7 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
-from . import netstat  # noqa: E402
+from . import netstat, sysproc  # noqa: E402
 
 RANGE_CHOICES = (
     "Last 7 days",
@@ -269,9 +269,12 @@ class SettingsWindow(Adw.Window):
             self.row_poll,
             self.row_window,
             self.row_retention,
-            self.row_track_apps,
         ):
             group.add(row)
+        if sysproc.IS_LINUX:
+            # Byte attribution (ss) is Linux-only; the row is still built so
+            # the saved value round-trips untouched on other platforms.
+            group.add(self.row_track_apps)
         return group
 
     def _behaviour_group(self) -> Adw.PreferencesGroup:
@@ -304,7 +307,9 @@ class SettingsWindow(Adw.Window):
             model=Gtk.StringList.new(list(_ACTION_CHOICES)),
             selected=_ACTION_VALUES.index(cfg.app_action),
         )
-        group.add(self.row_app_action)
+        if sysproc.IS_LINUX:
+            # Per-app limits need byte attribution, which is Linux-only.
+            group.add(self.row_app_action)
 
         selected = _COLOR_VALUES.index(cfg.color_scheme)
         self.row_theme = Adw.ComboRow(

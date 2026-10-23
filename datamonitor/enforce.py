@@ -1,47 +1,32 @@
 """Limit enforcement: pause / resume application process trees.
 
-Everything here works unprivileged - SIGSTOP / SIGCONT on our own user's
-processes needs no root.  ``evaluate()`` is a reconciler that runs every
-few seconds and brings reality in line with the configured rules:
+Everything here works unprivileged - suspending our own user's processes
+needs no root (SIGSTOP / SIGCONT on POSIX, ``NtSuspendProcess`` /
+``NtResumeProcess`` on Windows, see ``sysproc``).  ``evaluate()`` is a
+reconciler that runs every few seconds and brings reality in line with
+the configured rules:
 
 * app over its own limit  -> pause it (unless whitelisted)
 * overall cap exceeded    -> pause every app with traffic (minus whitelist)
 * no rule applies anymore -> resume what we paused
 
 The stopped pid sets are recorded in SQLite together with each pid's
-``/proc`` starttime, so pid reuse can never resume a stranger - and a
-restarted Data Monitor can resume (or re-assert) what the previous run
-paused.  Whitelisted apps are never touched.
+start time, so pid reuse can never resume a stranger - and a restarted
+Data Monitor can resume (or re-assert) what the previous run paused.
+Whitelisted apps are never touched.
+
+Per-app limits need byte attribution (Linux, ``ss``).  The overall cap
+pause also works on Windows and macOS, where the tracker runs in
+pids-only mode and pauses the processes holding TCP connections.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import signal
 import time
 
-from . import quota, util
-
-
-def _uid_of(pid: int) -> int | None:
-    try:
-        return os.stat(f"/proc/{pid}").st_uid
-    except OSError:
-        return None
-
-
-def _children_map() -> dict[int, list[int]]:
-    """parent -> [children] for readable /proc entries (one pass)."""
-    mapping: dict[int, list[int]] = {}
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
-            continue
-        stat = util.proc_stat(int(entry))
-        if stat is None:
-            continue
-        mapping.setdefault(stat[0], []).append(int(entry))
-    return mapping
+from . import quota, sysproc, util
 
 
 class Enforcer:
@@ -68,54 +53,39 @@ class Enforcer:
             if pid <= 1 or pid in protected:
                 break
             protected.add(pid)
-            stat = util.proc_stat(pid)
+            stat = sysproc.snapshot(pid)
             if stat is None:
                 break
             pid = stat[0]
         self._protected = protected
 
     def _stop_tree(self, roots) -> dict[int, int]:
-        """SIGSTOP ``roots`` and their descendants; return {pid: starttime}."""
+        """Freeze ``roots`` and their descendants; return {pid: starttime}."""
         self._refresh_protected()
-        children = _children_map()
-        todo = [p for p in roots if p not in self._protected]
-        seen: set[int] = set()
-        while todo:
-            pid = todo.pop()
-            if pid in seen or pid in self._protected:
-                continue
-            seen.add(pid)
-            todo.extend(children.get(pid, ()))
+        seen = sysproc.descendants(roots, self._protected)
 
-        my_uid = os.getuid()
         stopped: dict[int, int] = {}
         for pid in seen:
-            if _uid_of(pid) != my_uid:
+            if not sysproc.same_user(pid):
                 continue  # never touch another user's processes
-            stat = util.proc_stat(pid)
+            stat = sysproc.snapshot(pid)
             if stat is None:
                 continue
-            try:
-                os.kill(pid, signal.SIGSTOP)
-            except OSError:
+            if not sysproc.suspend(pid):
                 continue
             stopped[pid] = stat[1]
         return stopped
 
     @staticmethod
     def _continue(pids: dict[int, int]) -> None:
-        """SIGCONT recorded pids whose starttime still matches."""
-        my_uid = os.getuid()
+        """Thaw recorded pids whose starttime still matches."""
         for pid, starttime in pids.items():
-            stat = util.proc_stat(pid)
+            stat = sysproc.snapshot(pid)
             if stat is None or stat[1] != starttime:
                 continue  # gone or recycled - never signal a stranger
-            if _uid_of(pid) != my_uid:
+            if not sysproc.same_user(pid):
                 continue
-            try:
-                os.kill(pid, signal.SIGCONT)
-            except OSError:
-                pass
+            sysproc.resume(pid)
 
     # -- public API -------------------------------------------------------
     def paused(self) -> dict[str, dict]:
@@ -137,8 +107,14 @@ class Enforcer:
         paused = self.paused()
 
         tracker = getattr(sampler, "tracker", None)
-        if not cfg.track_apps or tracker is None or not tracker.available:
+        if (
+            tracker is None
+            or not tracker.available
+            or (sysproc.IS_LINUX and not cfg.track_apps)
+        ):
             # No attribution -> no enforcement; never leave apps frozen.
+            # Off-Linux the pid map is always on: track_apps only governs
+            # byte attribution, which those platforms cannot do anyway.
             for app, rec in paused.items():
                 self._resume(app, rec)
             return
@@ -270,15 +246,12 @@ class Enforcer:
         """Keep an already-recorded pause actually stopped."""
         still: dict[int, int] = {}
         for pid, starttime in rec["pids"].items():
-            stat = util.proc_stat(pid)
+            stat = sysproc.snapshot(pid)
             if stat is not None and stat[1] == starttime:
                 if pid in self._protected:
                     continue
-                still[pid] = starttime
-                try:
-                    os.kill(pid, signal.SIGSTOP)  # idempotent
-                except OSError:
-                    still.pop(pid, None)
+                if sysproc.suspend(pid):  # idempotent
+                    still[pid] = starttime
         if still:
             if still != rec["pids"]:
                 self.storage.add_paused(

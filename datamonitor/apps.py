@@ -17,7 +17,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Adw, Gdk, Gtk, Pango  # noqa: E402
 
-from . import quota, util  # noqa: E402
+from . import quota, sysproc, util  # noqa: E402
 from .settings import _spin_row, _switch_row  # noqa: E402
 from .widgets import BarChart  # noqa: E402
 
@@ -298,7 +298,19 @@ class AppsPage(Gtk.Box):
     def _configure_empty(self) -> None:
         cfg = self.window.config
         tracker = getattr(self.window.sampler, "tracker", None)
-        if not cfg.track_apps:
+        if not sysproc.IS_LINUX and (
+            tracker is None or not getattr(tracker, "has_bytes", False)
+        ):
+            self.empty.set_title("Per-app usage needs Linux")
+            self.empty.set_description(
+                "Attributing bytes to individual programs reads the "
+                "kernel's TCP socket counters (ss), which only Linux "
+                "provides. Totals, history, quotas and the overall data "
+                "cap work everywhere - and pausing apps when the overall "
+                "cap is hit works here too."
+            )
+            self.empty_button.set_visible(False)
+        elif not cfg.track_apps:
             self.empty.set_title("Per-app tracking is off")
             self.empty.set_description(
                 "Turn on “Track per-app usage” in Preferences to see which "

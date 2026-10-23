@@ -132,8 +132,10 @@ class DataMonitorApp(Adw.Application):
         Adw.Application.do_startup(self)
         theme.install_css()
         theme.apply_color_scheme(self.config.color_scheme)
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            GLib.unix_signal_add(GLib.PRIORITY_HIGH, signum, self._on_unix_signal)
+        # Not built into GLib on Windows; Ctrl+C in a console is rare there.
+        if hasattr(GLib, "unix_signal_add"):
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                GLib.unix_signal_add(GLib.PRIORITY_HIGH, signum, self._on_unix_signal)
         # Drop anything older than the retention window before showing numbers.
         try:
             self.storage.prune(

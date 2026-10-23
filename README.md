@@ -43,6 +43,9 @@ Built with GTK 4 + libadwaita, so it looks native next to your other apps.
 | iproute2 (`ss`) | per-app attribution — preinstalled on most distros |
 | Desktop | any with XDG autostart + notifications |
 
+Windows and macOS are supported through the packaged builds — see
+[Building for Windows / macOS](#building-for-windows--macos).
+
 On Arch / CachyOS:
 
 ```bash
@@ -88,6 +91,80 @@ Then either click **Data Monitor** in your application menu or run:
 ```bash
 datamonitor
 ```
+
+## Building for Windows / macOS
+
+Two scripts at the repository root build self-contained apps **on the target
+machine** — GTK cannot be cross-compiled, so build natively on each OS:
+
+### Windows — `.exe` (+ optional installer)
+
+1. Install [MSYS2](https://www.msys2.org), open the **MSYS2 MINGW64** shell,
+   run once:
+
+```bat
+pacman -S --needed mingw-w64-x86_64-python mingw-w64-x86_64-python-gobject mingw-w64-x86_64-python-cairo mingw-w64-x86_64-gtk4 mingw-w64-x86_64-libadwaita mingw-w64-x86_64-python-psutil mingw-w64-x86_64-pyinstaller mingw-w64-x86_64-dbus
+```
+
+2. Build (from `cmd.exe`, or `cmd //c build-windows.bat` inside MSYS2):
+
+```bat
+build-windows.bat              &:: dist\DataMonitor\DataMonitor.exe (+ installer when Inno Setup 6 is present)
+build-windows.bat install      &:: copy to %LOCALAPPDATA%\Data Monitor, start hidden at login
+build-windows.bat uninstall    &:: remove app + autostart (data is kept)
+```
+
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) is optional: without it you
+get the portable folder, with it additionally
+`dist\DataMonitor-Setup-<version>.exe` (per-user, no admin, optional
+"start at login" task).
+
+### macOS — `.app` + `.dmg`
+
+1. Install [Homebrew](https://brew.sh), then run once:
+
+```bash
+brew install gtk4 libadwaita glib gdk-pixbuf cairo pango \
+             pygobject pycairo python psutil pyinstaller dbus
+```
+
+2. Build:
+
+```bash
+./build-mac.sh              # dist/Data Monitor.app + dist/DataMonitor-<version>.dmg
+./build-mac.sh install      # copy to ~/Applications, start hidden at login
+./build-mac.sh uninstall    # remove app + login item (data is kept)
+```
+
+### What works where
+
+| Feature | Linux | Windows / macOS |
+|---|---|---|
+| Live rates, quotas, warnings, history, peaks | ✓ | ✓ |
+| Interfaces tab (kind, link state, speed) | ✓ | ✓ (best effort) |
+| Apps tab: per-app usage + per-app limits | ✓ | — needs Linux `ss` counters |
+| Pause apps when the **overall** cap is hit | ✓ | ✓ (pauses processes with TCP connections) |
+| Whitelist / "resume until tomorrow" | Apps tab | config file only |
+| Desktop notifications | ✓ | best effort (the in-app banner always works) |
+| Background start (`--hidden`) + autostart | ✓ | ✓ (Run key / LaunchAgent) |
+
+Things worth knowing about the packaged builds:
+
+* **Single instance**: the frozen builds start a private `dbus-daemon`
+  (bundled from MSYS2 / Homebrew) so launching a second time reopens the
+  window instead of opening a second monitor — same behaviour as running
+  `datamonitor` again on Linux. If no bus can be started, a lock file makes
+  the second launch exit quietly instead.
+* **Unsigned**: neither the `.exe` nor the `.dmg` is code-signed. Windows
+  SmartScreen and macOS Gatekeeper warn on first start ("More info → Run
+  anyway" / right-click → Open). Real distribution needs an Apple Developer
+  ID (≈ $99/year) + notarization, or an Authenticode certificate.
+* **Locations**: settings live in `%APPDATA%\datamonitor` (Windows) or
+  `~/Library/Preferences/datamonitor` (macOS); history in
+  `%LOCALAPPDATA%\datamonitor` respectively
+  `~/Library/Application Support/datamonitor`.
+* Interface naming (e.g. "Wi-Fi") and pause/resume use heuristics there;
+  Linux stays the reference platform.
 
 ## Run straight from the source tree
 
@@ -196,13 +273,18 @@ that is how ISPs quote quotas; speeds use bits (`Mbps`).
 - Every tick `ss -Htinp` lists TCP sockets with their cumulative byte counters
   and owning process; diffing per socket yields per-program byte deltas.
   Same principle as the interface counters: no packet capture, no privileges.
+  *(Linux only: Windows and macOS do not expose per-socket byte counters to
+  user space, so the Apps tab and per-app limits need Linux; the overall cap
+  pause still works there — see
+  [What works where](#what-works-where).)*
 - **TCP only.** UDP/QUIC (much of video calling, DNS, games), traffic from
   other users and protocol overhead land in **Other**. Loopback is skipped
   unless you track `lo`.
-- Pausing uses plain `SIGSTOP`/`SIGCONT` on the app's **own process tree**:
-  your user only — never other users' processes, never Data Monitor itself or
-  its launcher tree. Each stopped pid is recorded with its `/proc` start time,
-  so a recycled pid can never be resumed by mistake.
+- Pausing uses plain `SIGSTOP`/`SIGCONT` on the app's **own process tree**
+  (`NtSuspendProcess` on Windows): your user only — never other users'
+  processes, never Data Monitor itself or its launcher tree. Each stopped pid
+  is recorded with its process start time, so a recycled pid can never be
+  resumed by mistake.
 - The enforcer re-checks every 5 s and is idempotent: whitelist an app and it
   resumes within seconds; hitting *Resume now* holds until the next day;
   turning tracking off, or quitting Data Monitor, resumes everything.
@@ -221,6 +303,10 @@ that is how ISPs quote quotas; speeds use bits (`Mbps`).
 Set `DATAMONITOR_CONFIG_HOME` / `DATAMONITOR_DATA_HOME` to point the app at
 different directories (used for testing or a portable install). The older
 `DATAWATCH_CONFIG_HOME` / `DATAWATCH_DATA_HOME` names still work.
+The Windows / macOS builds use `%APPDATA%\datamonitor`,
+`%LOCALAPPDATA%\datamonitor`, `~/Library/Preferences/datamonitor` and
+`~/Library/Application Support/datamonitor` instead (see
+[Building for Windows / macOS](#building-for-windows--macos)).
 
 ---
 

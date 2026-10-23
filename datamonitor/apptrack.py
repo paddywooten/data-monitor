@@ -1,25 +1,30 @@
 """Per-application traffic attribution without root.
 
-``ss`` (iproute2) asks the kernel for every TCP socket together with its
-cumulative ``bytes_received`` / ``bytes_acked`` counters and the owning
-process.  Diffing those counters between polls yields byte deltas per
-program:
+Linux only: ``ss`` (iproute2) asks the kernel for every TCP socket
+together with its cumulative ``bytes_received`` / ``bytes_acked``
+counters and the owning process.  Diffing those counters between polls
+yields byte deltas per program:
 
 * TCP only - UDP/QUIC traffic and other users' sockets stay in the
   "unattributed" remainder shown on the Apps page;
 * no privileges needed: our own user's sockets map to processes through
   ``/proc``;
 * a full ``ss`` scan costs ~20 ms, so it fits the existing GLib tick.
+
+Windows and macOS have no per-socket byte counters a user can read, so
+there the tracker runs in a reduced *pids-only* mode: psutil lists the
+process behind every TCP connection, which is enough for the enforcer to
+pause apps when the overall cap is hit, but it cannot split bytes per
+program (``has_bytes`` is False and the Apps tab says so).
 """
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
 
-from . import util
+from . import sysproc
 
 _USERS_RE = re.compile(r'users:\(\("([^"]+)",\s*pid=(\d+),\s*fd=(\d+)\)')
 _RX_RE = re.compile(r"\bbytes_received:(\d+)")
@@ -27,15 +32,8 @@ _TX_RE = re.compile(r"\bbytes_acked:(\d+)")
 
 
 def _exe_name(pid: int) -> str | None:
-    """Program name from ``/proc/<pid>/exe`` (stable across restarts)."""
-    try:
-        target = os.readlink(f"/proc/{pid}/exe")
-    except OSError:
-        return None
-    if target.endswith(" (deleted)"):
-        target = target[: -len(" (deleted)")]
-    name = os.path.basename(target)
-    return name or None
+    """Program name for a pid (stable across restarts)."""
+    return sysproc.exe_name(pid)
 
 
 def _is_loopback(local: str) -> bool:
@@ -61,7 +59,13 @@ class AppTracker:
     """Turns cumulative per-socket counters into per-app byte deltas."""
 
     def __init__(self) -> None:
-        self.available = shutil.which("ss") is not None
+        if sysproc.IS_LINUX:
+            self.has_bytes = shutil.which("ss") is not None
+            self.available = self.has_bytes
+        else:
+            # pids-only: enough for the enforcer, not for byte attribution.
+            self.has_bytes = False
+            self.available = sysproc.psutil_or_none() is not None
         self.enabled = False  # set from config via reconfigure()
         # (pid, fd) -> (bytes_received, bytes_acked, starttime)
         self._sockets: dict[tuple[int, int], tuple[int, int, int]] = {}
@@ -70,7 +74,12 @@ class AppTracker:
     # -- configuration ----------------------------------------------------
     def reconfigure(self, enabled: bool) -> None:
         """Apply the ``track_apps`` setting; baselines restart from zero."""
-        self.enabled = bool(enabled and self.available)
+        if sysproc.IS_LINUX:
+            self.enabled = bool(enabled and self.available)
+        else:
+            # No byte attribution to switch off; the enforcer still needs
+            # the pid map, so pids-only tracking is always on when possible.
+            self.enabled = self.available
         if not self.enabled:
             self.reset()
 
@@ -91,6 +100,8 @@ class AppTracker:
         """Read all TCP sockets; return ``{app: [rx_delta, tx_delta]}``."""
         if not self.enabled:
             return {}
+        if not sysproc.IS_LINUX:
+            return self._poll_pids_only(count_loopback)
         try:
             out = subprocess.run(
                 ["ss", "-Htinp"],
@@ -119,7 +130,7 @@ class AppTracker:
             rx, tx = _RX_RE.search(text), _TX_RE.search(text)
             if not rx or not tx:
                 continue
-            stat = util.proc_stat(pid)
+            stat = sysproc.snapshot(pid)
             if stat is None:
                 continue
             starttime = stat[1]
@@ -147,3 +158,35 @@ class AppTracker:
         self._sockets = seen
         self._pids = pids
         return deltas
+
+    # -- pids-only mode (Windows / macOS) ---------------------------------
+    def _poll_pids_only(self, count_loopback: bool) -> dict[str, list[int]]:
+        """Refresh ``{app: [pids]}`` from live TCP connections; no bytes."""
+        ps = sysproc.psutil_or_none()
+        if ps is None:
+            return {}
+        try:
+            connections = ps.net_connections(kind="tcp")
+        except Exception:
+            return {}
+        pids: dict[str, list[int]] = {}
+        for conn in connections:
+            if not conn.pid:
+                continue  # system socket or another user's process
+            if not count_loopback and _conn_is_loopback(conn):
+                continue
+            name = _exe_name(conn.pid) or f"pid:{conn.pid}"
+            bucket = pids.setdefault(name, [])
+            if conn.pid not in bucket:
+                bucket.append(conn.pid)
+        self._pids = pids
+        return {}
+
+
+def _conn_is_loopback(conn) -> bool:
+    """True when the local address of a psutil connection is loopback."""
+    try:
+        host = conn.laddr.ip
+    except (AttributeError, IndexError):
+        return False
+    return host.startswith("127.") or host == "::1"
