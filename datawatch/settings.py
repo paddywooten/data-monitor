@@ -21,6 +21,9 @@ RANGE_CHOICES = (
 _COLOR_CHOICES = ("Follow system", "Light", "Dark")
 _COLOR_VALUES = ("system", "light", "dark")
 
+_ACTION_CHOICES = ("Notify me", "Pause the app(s)")
+_ACTION_VALUES = ("notify", "pause")
+
 
 def _spin_row(
     title: str,
@@ -257,7 +260,17 @@ class SettingsWindow(Adw.Window):
             digits=0,
             suffix="days",
         )
-        for row in (self.row_poll, self.row_window, self.row_retention):
+        self.row_track_apps = _switch_row(
+            "Track per-app usage",
+            "Attribute traffic to programs (TCP only, needs ss)",
+            cfg.track_apps,
+        )
+        for row in (
+            self.row_poll,
+            self.row_window,
+            self.row_retention,
+            self.row_track_apps,
+        ):
             group.add(row)
         return group
 
@@ -276,6 +289,22 @@ class SettingsWindow(Adw.Window):
         )
         group.add(self.row_notify)
         group.add(self.row_background)
+
+        self.row_overall_action = Adw.ComboRow(
+            title="When my overall limit is hit",
+            subtitle="Daily or billing-cycle cap reached",
+            model=Gtk.StringList.new(list(_ACTION_CHOICES)),
+            selected=_ACTION_VALUES.index(cfg.overall_action),
+        )
+        group.add(self.row_overall_action)
+
+        self.row_app_action = Adw.ComboRow(
+            title="When an app's own limit is hit",
+            subtitle="Per-app limits from the Apps tab",
+            model=Gtk.StringList.new(list(_ACTION_CHOICES)),
+            selected=_ACTION_VALUES.index(cfg.app_action),
+        )
+        group.add(self.row_app_action)
 
         selected = _COLOR_VALUES.index(cfg.color_scheme)
         self.row_theme = Adw.ComboRow(
@@ -316,6 +345,9 @@ class SettingsWindow(Adw.Window):
             "notify": bool(self.row_notify.get_active()),
             "background_on_close": bool(self.row_background.get_active()),
             "color_scheme": theme_value,
+            "track_apps": bool(self.row_track_apps.get_active()),
+            "overall_action": _ACTION_VALUES[self.row_overall_action.get_selected()],
+            "app_action": _ACTION_VALUES[self.row_app_action.get_selected()],
         }
         self.on_save(values)
         self.close()

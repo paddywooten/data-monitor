@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--page",
-        choices=("overview", "history", "interfaces"),
+        choices=("overview", "history", "apps", "interfaces"),
         help="open the dashboard on a specific tab",
     )
     parser.add_argument(

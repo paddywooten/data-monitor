@@ -7,4 +7,4 @@ a live GTK4/libadwaita dashboard with quota alerts.
 
 APP_NAME = "Datawatch"
 APP_ID = "io.datawatch.App"
-__version__ = "1.0.0"
+__version__ = "1.1.0"

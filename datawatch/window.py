@@ -13,6 +13,8 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from . import netstat, quota, theme, util  # noqa: E402
 from . import APP_NAME  # noqa: E402
+from .apps import AppsPage  # noqa: E402
+from .enforce import Enforcer  # noqa: E402
 from .settings import SettingsWindow  # noqa: E402
 from .widgets import BarChart, SpeedGraph, StatCard  # noqa: E402
 
@@ -52,7 +54,7 @@ def _table_row(values, header: bool = False, tones=None) -> Gtk.Grid:
 class MainWindow(Adw.ApplicationWindow):
     """Dashboard: live speeds, quota panel, history and per-interface stats."""
 
-    def __init__(self, app, config, storage, sampler):
+    def __init__(self, app, config, storage, sampler, enforcer=None):
         super().__init__(
             application=app,
             title=APP_NAME,
@@ -62,6 +64,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.config = config
         self.storage = storage
         self.sampler = sampler
+        # Fallback keeps old test harnesses working without an enforcer.
+        self.enforcer = enforcer or Enforcer(config, storage)
 
         self._settings: SettingsWindow | None = None
         self._background_hinted = False
@@ -80,6 +84,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._refresh_totals()
         self._refresh_interfaces()
         self._refresh_history()
+        self.apps_page.refresh()
+        self._enforce()
 
         GLib.timeout_add_seconds(5, self._on_totals_timer)
         GLib.timeout_add_seconds(30, self._on_maintenance_timer)
@@ -143,6 +149,10 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self.stack.add_titled_with_icon(
             self._build_history_page(), "history", "History", "document-open-recent-symbolic"
+        )
+        self.apps_page = AppsPage(self)
+        self.stack.add_titled_with_icon(
+            self.apps_page, "apps", "Apps", "system-run-symbolic"
         )
         self.stack.add_titled_with_icon(
             self._build_interfaces_page(), "interfaces", "Interfaces",
@@ -334,10 +344,20 @@ class MainWindow(Adw.ApplicationWindow):
     # =====================================================================
     # slower totals refresh (every 5 seconds)
     # =====================================================================
+    def _enforce(self) -> None:
+        """Reconcile pause/resume rules; never let this kill the timer."""
+        try:
+            self.enforcer.evaluate(self.sampler)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
     def _on_totals_timer(self) -> bool:
+        self._enforce()
         self._refresh_totals()
         if self.stack.get_visible_child_name() == "interfaces":
             self._refresh_interfaces()
+        elif self.stack.get_visible_child_name() == "apps":
+            self.apps_page.refresh()
         return GLib.SOURCE_CONTINUE
 
     def _on_maintenance_timer(self) -> bool:
@@ -773,6 +793,8 @@ class MainWindow(Adw.ApplicationWindow):
         name = self.stack.get_visible_child_name()
         if name == "history":
             self._refresh_history()
+        elif name == "apps":
+            self.apps_page.refresh()
         elif name == "interfaces":
             self._refresh_interfaces()
 
@@ -814,6 +836,7 @@ class MainWindow(Adw.ApplicationWindow):
             theme.apply_color_scheme(self.config.color_scheme)
         self.storage.prune(time.time() - self.config.retention_days * 86400)
         self.storage.clear_notified()
+        self.sampler.tracker.reconfigure(self.config.track_apps)
 
         if changed_poll or changed_window:
             self.sampler.restart()
@@ -824,9 +847,11 @@ class MainWindow(Adw.ApplicationWindow):
             f"last {util.format_duration(self.config.graph_window)}"
         )
 
+        self._enforce()  # new limits / actions apply immediately
         self._refresh_totals()
         self._refresh_interfaces()
         self._refresh_history()
+        self.apps_page.refresh()
         self.toast_overlay.add_toast(Adw.Toast(title="Preferences saved", timeout=3))
 
     def _on_close_request(self, *_args) -> bool:

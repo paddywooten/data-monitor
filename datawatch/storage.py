@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import time
 
 from . import config as config_mod
 from . import util
@@ -39,6 +40,27 @@ CREATE TABLE IF NOT EXISTS iface_totals (
     iface TEXT PRIMARY KEY,
     rx    INTEGER NOT NULL DEFAULT 0,
     tx    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS app_usage (
+    minute INTEGER NOT NULL,
+    app    TEXT    NOT NULL,
+    rx     INTEGER NOT NULL DEFAULT 0,
+    tx     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (minute, app)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS app_totals (
+    app TEXT PRIMARY KEY,
+    rx  INTEGER NOT NULL DEFAULT 0,
+    tx  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS paused_apps (
+    app       TEXT PRIMARY KEY,
+    pids      TEXT NOT NULL,
+    reason    TEXT NOT NULL DEFAULT '',
+    paused_at INTEGER NOT NULL
 );
 """
 
@@ -82,6 +104,32 @@ class Storage:
                     "ON CONFLICT (iface) DO UPDATE SET "
                     "  rx = iface_totals.rx + excluded.rx, tx = iface_totals.tx + excluded.tx",
                     (iface, int(rx), int(tx)),
+                )
+                cur.execute("COMMIT")
+            except Exception:
+                cur.execute("ROLLBACK")
+                raise
+
+    def add_app_usage(self, minute: int, app: str, rx: int, tx: int) -> None:
+        """Record per-program bytes for ``minute`` (epoch, minute aligned)."""
+        if rx <= 0 and tx <= 0:
+            return
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "INSERT INTO app_usage (minute, app, rx, tx) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT (minute, app) DO UPDATE SET "
+                    "  rx = app_usage.rx + excluded.rx, tx = app_usage.tx + excluded.tx",
+                    (int(minute), app, int(rx), int(tx)),
+                )
+                # Lifetime table (never pruned), like iface_totals.
+                cur.execute(
+                    "INSERT INTO app_totals (app, rx, tx) VALUES (?, ?, ?) "
+                    "ON CONFLICT (app) DO UPDATE SET "
+                    "  rx = app_totals.rx + excluded.rx, tx = app_totals.tx + excluded.tx",
+                    (app, int(rx), int(tx)),
                 )
                 cur.execute("COMMIT")
             except Exception:
@@ -183,6 +231,60 @@ class Storage:
             ).fetchall()
         return {r[0]: (int(r[1]), int(r[2])) for r in rows}
 
+    def app_totals_range(
+        self, start: int, end: int
+    ) -> list[tuple[str, int, int]]:
+        """``[(app, rx, tx), ...]`` for every app in ``[start, end)``."""
+        sql = (
+            "SELECT app, COALESCE(SUM(rx), 0), COALESCE(SUM(tx), 0) "
+            "FROM app_usage WHERE minute >= ? AND minute < ? "
+            "GROUP BY app ORDER BY SUM(rx) + SUM(tx) DESC"
+        )
+        with self._lock:
+            rows = self.conn.execute(sql, (int(start), int(end))).fetchall()
+        return [(r[0], int(r[1]), int(r[2])) for r in rows]
+
+    def app_totals_all(self) -> dict[str, tuple[int, int]]:
+        """Lifetime totals per app (never pruned)."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT app, rx, tx FROM app_totals ORDER BY rx + tx DESC"
+            ).fetchall()
+        return {r[0]: (int(r[1]), int(r[2])) for r in rows}
+
+    # -- paused apps (enforcement state) ----------------------------------
+    def add_paused(self, app: str, pids: str, reason: str, paused_at: int) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO paused_apps (app, pids, reason, paused_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (app) DO UPDATE SET "
+                "  pids = excluded.pids, reason = excluded.reason, "
+                "  paused_at = excluded.paused_at",
+                (app, pids, str(reason), int(paused_at)),
+            )
+
+    def remove_paused(self, app: str) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM paused_apps WHERE app = ?", (app,))
+
+    def list_paused(self) -> list[tuple[str, str, str, int]]:
+        """``[(app, pids_json, reason, paused_at), ...]``"""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT app, pids, reason, paused_at FROM paused_apps"
+            ).fetchall()
+        return [(r[0], r[1], r[2], int(r[3])) for r in rows]
+
+    def clear_app_alerts(self, app: str) -> None:
+        """Forget an app's manual-resume marker and today's pause alert
+        so changed limits take effect immediately."""
+        today = util.day_key(time.time())
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM state WHERE key IN (?, ?)",
+                (f"resume:{app}", f"notified:paused-{app}:{today}"),
+            )
+
     def sample_count(self) -> int:
         with self._lock:
             row = self.conn.execute("SELECT COUNT(*) FROM usage").fetchone()
@@ -200,6 +302,10 @@ class Storage:
         with self._lock:
             cur = self.conn.execute("DELETE FROM usage WHERE minute < ?", (int(before),))
             deleted = max(0, int(cur.rowcount or 0))
+            cur = self.conn.execute(
+                "DELETE FROM app_usage WHERE minute < ?", (int(before),)
+            )
+            deleted = max(deleted, int(cur.rowcount or 0))
             # Peak records are keyed by day; forget anything before the cutoff.
             self.conn.execute(
                 "DELETE FROM state WHERE (key LIKE 'peak_down:%' OR key LIKE 'peak_up:%') "

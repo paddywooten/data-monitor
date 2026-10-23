@@ -12,6 +12,15 @@ weeks of history and warns you before you burn through a monthly quota.
 - **Data limits** — set a billing-cycle allowance and/or a daily allowance, with
   a warning threshold (80 % by default). You get an in-app banner *and* a
   desktop notification when you get close or go over.
+- **Top apps** — attribute traffic to the programs actually sending it and see
+  the biggest consumers on a dedicated **Apps** tab (TCP sockets via `ss`,
+  still no root and no packet capture).
+- **Restrictions** — give an app its own daily/cycle limit, and/or set an
+  overall cap; when a limit is hit Datawatch can *pause* the app (freeze it
+  with `SIGSTOP` until the reset) instead of only notifying you.
+- **Whitelists** — exempt critical apps (SSH, video calls, …) from every
+  automatic pause: neither their own limits nor the overall cap ever freeze
+  them.
 - **History** — per-minute samples in SQLite, browsable as daily bars and a
   table (7 days / 30 days / this cycle / this year).
 - **Per-interface breakdown** — Wi-Fi, Ethernet, VPN, tethering: see and choose
@@ -31,24 +40,25 @@ Built with GTK 4 + libadwaita, so it looks native next to your other apps.
 | Python | 3.10+ (tested on 3.14) |
 | GTK | 4.x + libadwaita 1.x |
 | Python bindings | `python-gobject`, `pycairo` |
+| iproute2 (`ss`) | per-app attribution — preinstalled on most distros |
 | Desktop | any with XDG autostart + notifications |
 
 On Arch / CachyOS:
 
 ```bash
-sudo pacman -S python-gobject gtk4 libadwaita python-cairo
+sudo pacman -S python-gobject gtk4 libadwaita python-cairo iproute2
 ```
 
 On Debian / Ubuntu:
 
 ```bash
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-cairo
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-cairo iproute2
 ```
 
 On Fedora:
 
 ```bash
-sudo dnf install python3-gobject gtk4 libadwaita python3-cairo
+sudo dnf install python3-gobject gtk4 libadwaita python3-cairo iproute
 ```
 
 ## Install
@@ -88,7 +98,7 @@ python3 -m datawatch
 ```
 datawatch                 open the dashboard
 datawatch --hidden        start in the background (window hidden)
-datawatch --page history  open on a tab: overview | history | interfaces
+datawatch --page apps     open on a tab: overview | history | apps | interfaces
 datawatch --settings      open Preferences on start
 datawatch --version
 ```
@@ -111,6 +121,24 @@ that is the documented way to reopen the background instance.
 **History** — pick a range, hover a bar for the exact figure, and read the table
 below. Bars turn amber at your warning threshold and red past the daily limit.
 
+**Apps** — who is using your data: a bar chart (scope picker: *Today / This
+billing cycle / All time*) over a table of every program with its totals and a
+status column. Anything not attributable to a TCP socket — UDP/QUIC, other
+users, protocol overhead — shows up as the **Other** bar. The ⋮ menu on each
+row:
+
+- **Set or change limits…** — a daily and/or billing-cycle limit *for that app*.
+  Preferences decides whether reaching it notifies you or pauses the app.
+- **Whitelist — never pause** — the app is exempt from its own limits **and**
+  from the overall "pause everything" cap. The dialog has the same switch.
+- **Resume now** — unfreeze a paused app; it stays running until tomorrow.
+  The banner's **Resume all** does that for everything at once.
+
+When something is paused you get a banner (*N apps paused — limit reached* with
+**Resume all**), a red *Paused — …* status on the row, and a desktop
+notification. Datawatch never leaves an app frozen: quitting it resumes
+everything, and limits are re-checked every few seconds.
+
 **Interfaces** — each adapter with its kind, link state, current rate, and
 today / cycle / all-time totals. The switch decides whether it counts toward
 your limits and totals. Loops back in automatically (VPN up? docked?) when you
@@ -128,6 +156,9 @@ leave it on *Automatic*.
 | Sampling interval | Seconds between counter reads (1–60) |
 | Graph window | Seconds of live history (30–3600) |
 | History retention | Days of samples kept (default 730) |
+| Track per-app usage | Attribute traffic to programs (needs `ss`) |
+| When my overall limit is hit | Notify me / **Pause the app(s)** |
+| When an app's own limit is hit | Notify me / **Pause the app(s)** |
 | Desktop notifications | Toggle the quota notifications |
 | Keep running when closed | Close-to-background behaviour |
 | Appearance | Follow system / light / dark |
@@ -141,6 +172,7 @@ that is how ISPs quote quotas; speeds use bits (`Mbps`).
 
 ```
  /proc/net/dev ──(every 2 s)──▶ Sampler ──(per-minute buckets)──▶ SQLite
+   ss -Htinp ────(same tick)──▶ per-app deltas ──┘
                                        └──▶ live rates ──▶ graph / cards
                                                              └──▶ quota checks ──▶ banner + notification
 ```
@@ -156,11 +188,27 @@ that is how ISPs quote quotas; speeds use bits (`Mbps`).
 - Retention prunes old rows on startup; lifetime totals are kept separately so
   "All time" never shrinks when old data is pruned.
 
+### Per-app attribution & restrictions
+
+- Every tick `ss -Htinp` lists TCP sockets with their cumulative byte counters
+  and owning process; diffing per socket yields per-program byte deltas.
+  Same principle as the interface counters: no packet capture, no privileges.
+- **TCP only.** UDP/QUIC (much of video calling, DNS, games), traffic from
+  other users and protocol overhead land in **Other**. Loopback is skipped
+  unless you track `lo`.
+- Pausing uses plain `SIGSTOP`/`SIGCONT` on the app's **own process tree**:
+  your user only — never other users' processes, never Datawatch itself or
+  its launcher tree. Each stopped pid is recorded with its `/proc` start time,
+  so a recycled pid can never be resumed by mistake.
+- The enforcer re-checks every 5 s and is idempotent: whitelist an app and it
+  resumes within seconds; hitting *Resume now* holds until the next day;
+  turning tracking off, or quitting Datawatch, resumes everything.
+
 ### Files
 
 | Path | Contents |
 |---|---|
-| `~/.config/datawatch/config.json` | settings |
+| `~/.config/datawatch/config.json` | settings — limits, actions, per-app limits, whitelist |
 | `~/.local/share/datawatch/history.sqlite3` | usage history |
 | `~/.local/share/datawatch/datawatch/` | installed copy of the app |
 | `~/.local/bin/datawatch` | launcher |
@@ -180,6 +228,15 @@ appears as its own interface.
 
 **Usage looks too high / too low** — confirm which interfaces are counted, and
 that the billing-cycle start day matches your plan.
+
+**The Apps tab is empty** — turn on *Track per-app usage* in Preferences and
+make sure `ss` is installed (`iproute2`). If much of your usage sits in
+*Other*, that is UDP/QUIC or another user's traffic: attribution is TCP-only
+by design.
+
+**An app stayed paused** — shouldn't happen (Datawatch resumes everything on
+quit), but you can always SIGCONT it yourself or use **Resume all** in the
+Apps tab after starting `datawatch`.
 
 **No notifications** — the desktop needs a notification daemon (KDE and GNOME
 have one). You can turn them off entirely in Preferences; the banner always

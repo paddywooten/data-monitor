@@ -233,6 +233,7 @@ class BarChart(Gtk.DrawingArea):
         self.set_draw_func(self._draw)
         # items: (label, value_bytes, tone)  tone in ok / warn / error / active
         self.items: list[tuple[str, float, str]] = []
+        self._tooltips: list[str] | None = None
         self.empty_text = "No samples for this range yet."
         self._hover = -1
 
@@ -241,8 +242,13 @@ class BarChart(Gtk.DrawingArea):
         motion.connect("leave", self._on_leave)
         self.add_controller(motion)
 
-    def set_items(self, items: list[tuple[str, float, str]]) -> None:
+    def set_items(
+        self,
+        items: list[tuple[str, float, str]],
+        tooltips: list[str] | None = None,
+    ) -> None:
         self.items = list(items)
+        self._tooltips = list(tooltips) if tooltips else None
         self._hover = -1
         self.set_tooltip_text(None)
         self.queue_draw()
@@ -265,9 +271,12 @@ class BarChart(Gtk.DrawingArea):
         index = self._index_at(x, y, width)
         if index != self._hover:
             self._hover = index
-            if index >= 0:
-                label, value, _ = self.items[index]
-                self.set_tooltip_text(f"{label}: {util.format_bytes(value)}")
+            if 0 <= index < len(self.items):
+                if self._tooltips and index < len(self._tooltips):
+                    self.set_tooltip_text(self._tooltips[index])
+                else:
+                    label, value, _ = self.items[index]
+                    self.set_tooltip_text(f"{label}: {util.format_bytes(value)}")
             else:
                 self.set_tooltip_text(None)
             self.queue_draw()

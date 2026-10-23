@@ -14,6 +14,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 from . import APP_ID, APP_NAME, __version__  # noqa: E402
 from . import theme  # noqa: E402
 from .config import Config  # noqa: E402
+from .enforce import Enforcer  # noqa: E402
 from .sampler import Sampler  # noqa: E402
 from .storage import Storage  # noqa: E402
 from .window import MainWindow  # noqa: E402
@@ -36,6 +37,7 @@ class DatawatchApp(Adw.Application):
         self.config = Config.load()
         self.storage = Storage()
         self.sampler = Sampler(self.storage, self.config, on_tick=self._dispatch_tick)
+        self.enforcer = Enforcer(self.config, self.storage, notify=self._notify_enforcement)
         self.window: MainWindow | None = None
 
         self._install_actions()
@@ -58,7 +60,7 @@ class DatawatchApp(Adw.Application):
     def activate_window(self) -> None:
         if self.window is None:
             self.window = MainWindow(
-                self, self.config, self.storage, self.sampler
+                self, self.config, self.storage, self.sampler, self.enforcer
             )
             if self.start_page:
                 self.window.stack.set_visible_child_name(self.start_page)
@@ -109,6 +111,18 @@ class DatawatchApp(Adw.Application):
         except Exception:  # pragma: no cover
             pass
 
+    def _notify_enforcement(self, nid: str, title: str, body: str, urgent: bool = False) -> None:
+        """Desktop notification from the limit enforcer (pause events)."""
+        note = Gio.Notification.new(title)
+        note.set_body(body)
+        if urgent:
+            note.set_priority(Gio.NotificationPriority.URGENT)
+        note.add_button("Open Datawatch", "app.activate")
+        try:
+            self.send_notification(nid, note)
+        except Exception:  # pragma: no cover - no notification daemon
+            pass
+
     # -- runtime ----------------------------------------------------------
     def _dispatch_tick(self, sampler) -> None:
         if self.window is not None:
@@ -132,6 +146,11 @@ class DatawatchApp(Adw.Application):
         self.activate_window()
 
     def do_shutdown(self) -> None:
+        try:
+            # Never leave apps frozen when Datawatch exits.
+            self.enforcer.shutdown()
+        except Exception:  # pragma: no cover
+            pass
         try:
             self.sampler.stop()
         finally:

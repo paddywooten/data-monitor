@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import os
 import time
 
 # Data volumes are shown in decimal (SI) units because ISP / mobile quotas
@@ -118,3 +119,31 @@ def format_duration(seconds: float) -> str:
 
 def plural(count: float, word: str, suffix: str = "s") -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}{suffix}"
+
+
+# --------------------------------------------------------------------------
+# /proc helpers (used for per-app attribution and limit enforcement)
+# --------------------------------------------------------------------------
+def proc_stat(pid: int) -> tuple[int, int] | None:
+    """``(ppid, starttime)`` from ``/proc/<pid>/stat``; ``None`` if gone.
+
+    ``comm`` may contain spaces and parentheses, so only the fields after
+    the *last* ``)`` are safe to split.  ``starttime`` (field 22) is the
+    process' start in clock ticks - it makes pid reuse detectable, so we
+    can never mistake a recycled pid for the app we paused.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    close = data.rfind(")")
+    if close < 0:
+        return None
+    fields = data[close + 1:].split()
+    if len(fields) < 20:
+        return None
+    try:
+        return int(fields[1]), int(fields[19])
+    except ValueError:
+        return None

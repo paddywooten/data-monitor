@@ -33,13 +33,29 @@ DEFAULTS: dict[str, Any] = {
     "background_on_close": True,
     # "system", "light" or "dark"
     "color_scheme": "system",
+    # Attribute traffic to programs (needs the ss tool, TCP only).
+    "track_apps": True,
+    # What to do when the overall daily / cycle cap is reached:
+    # "notify" or "pause" (pause = freeze running apps until the reset).
+    "overall_action": "pause",
+    # What to do when an app reaches its own limit: "notify" or "pause".
+    "app_action": "pause",
+    # Per-app limits: {app: {"daily_mb": float, "cycle_mb": float}}.
+    "app_limits": {},
+    # Apps that are never paused automatically (exempt from all enforcement).
+    "app_whitelist": [],
 }
 
 _FLOAT_KEYS = {"poll_interval", "cycle_limit_gb", "day_limit_gb", "warn_percent"}
 _INT_KEYS = {"retention_days", "cycle_day", "graph_window"}
-_BOOL_KEYS = {"exclude_loopback", "notify", "background_on_close"}
-_LIST_KEYS = {"interfaces"}
-_STR_KEYS = {"color_scheme"}
+_BOOL_KEYS = {"exclude_loopback", "notify", "background_on_close", "track_apps"}
+_LIST_KEYS = {"interfaces", "app_whitelist"}
+_DICT_KEYS = {"app_limits"}
+_STR_CHOICES = {
+    "color_scheme": ("system", "light", "dark"),
+    "overall_action": ("notify", "pause"),
+    "app_action": ("notify", "pause"),
+}
 
 
 def config_dir() -> str:
@@ -121,9 +137,27 @@ class Config:
             if not isinstance(value, list):
                 value = list(DEFAULTS[key])
             setattr(self, key, [str(v) for v in value])
-        for key in _STR_KEYS:
+        for key in _DICT_KEYS:
             value = getattr(self, key)
-            if not isinstance(value, str) or value not in ("system", "light", "dark"):
+            if not isinstance(value, dict):
+                value = {}
+            clean: dict[str, dict[str, float]] = {}
+            for name, limits in value.items():
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                if not isinstance(limits, dict):
+                    continue
+                try:
+                    daily = max(0.0, float(limits.get("daily_mb", 0) or 0))
+                    cycle = max(0.0, float(limits.get("cycle_mb", 0) or 0))
+                except (TypeError, ValueError):
+                    continue
+                if daily > 0 or cycle > 0:
+                    clean[name.strip()] = {"daily_mb": daily, "cycle_mb": cycle}
+            setattr(self, key, clean)
+        for key, choices in _STR_CHOICES.items():
+            value = getattr(self, key)
+            if not isinstance(value, str) or value not in choices:
                 value = DEFAULTS[key]
             setattr(self, key, value)
 
@@ -135,6 +169,9 @@ class Config:
         self.warn_percent = min(100.0, max(1.0, self.warn_percent))
         self.cycle_limit_gb = max(0.0, self.cycle_limit_gb)
         self.day_limit_gb = max(0.0, self.day_limit_gb)
+        self.app_whitelist = list(
+            dict.fromkeys(a for a in self.app_whitelist if a)
+        )[:500]
 
     # -- convenience ------------------------------------------------------
     def cycle_limit_bytes(self) -> int:

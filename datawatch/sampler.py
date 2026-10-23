@@ -16,7 +16,7 @@ gi.require_version("GLib", "2.0")
 from gi.repository import GLib  # noqa: E402
 
 from . import config as config_mod  # noqa: E402
-from . import netstat, quota, util  # noqa: E402
+from . import apptrack, netstat, quota, util  # noqa: E402
 
 # Don't trust a rate computed over an implausibly long gap (laptop lid closed,
 # system suspended, machine hibernated ...).  The bytes are still recorded,
@@ -53,11 +53,16 @@ class Sampler:
         self._prev: dict[str, tuple[int, int]] = {}
         self._last_monotonic = 0.0
         self._pending: dict[str, list[int]] = {}
+        self._pending_apps: dict[str, list[int]] = {}
         self._pending_minute = 0
         self._last_flush = 0.0
         self._source_id = 0
         self._dirty_peak = False
         self._last_peak_save = 0.0
+
+        # Per-program attribution (ss / iproute2); polled on the same tick.
+        self.tracker = apptrack.AppTracker()
+        self.tracker.reconfigure(self.config.track_apps)
 
         self.series: deque[tuple[float, float, float]] = deque(
             maxlen=self._series_len()
@@ -154,6 +159,16 @@ class Sampler:
         self.series.append((time.time(), rate_down, rate_up))
         self._update_peaks()
 
+        # Per-app attribution: diff cumulative TCP socket counters.
+        if self.tracker.enabled:
+            for app, (rx, tx) in self.tracker.poll(
+                count_loopback="lo" in tracked
+            ).items():
+                if rx > 0 or tx > 0:
+                    bucket = self._pending_apps.setdefault(app, [0, 0])
+                    bucket[0] += rx
+                    bucket[1] += tx
+
         minute = self._current_minute()
         if minute != self._pending_minute or (now - self._last_flush) >= self.FLUSH_SECONDS:
             self.flush(new_minute=minute)
@@ -172,6 +187,11 @@ class Sampler:
                 if rx > 0 or tx > 0:
                     self.storage.add_usage(minute, iface, rx, tx)
             self._pending.clear()
+        if self._pending_apps:
+            for app, (rx, tx) in list(self._pending_apps.items()):
+                if rx > 0 or tx > 0:
+                    self.storage.add_app_usage(minute, app, rx, tx)
+            self._pending_apps.clear()
         self._last_flush = time.monotonic()
         self._pending_minute = minute
         if self._dirty_peak:
@@ -206,6 +226,11 @@ class Sampler:
         self._last_peak_save = time.monotonic()
 
     # -- quota helpers used by the UI ------------------------------------
+    @property
+    def tracked_apps(self) -> set[str]:
+        """Apps seen on live sockets right now (empty when tracking is off)."""
+        return self.tracker.current_apps if self.tracker.enabled else set()
+
     def usage_today(self) -> tuple[int, int]:
         start, end = quota.day_bounds(time.time())
         return self.storage.totals(start, end, self.tracked)
