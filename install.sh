@@ -111,6 +111,13 @@ if [[ -f "$SRC/packaging/datamonitor.svg" ]]; then
     install -m 0644 "$SRC/packaging/datamonitor.svg" "$ICON_DIR/datamonitor.svg"
     echo "  icon       -> $ICON_DIR/datamonitor.svg"
 fi
+# Without an index.theme some icon loaders ignore the user's hicolor dir
+# entirely, falling back to a placeholder icon in the app menu.
+HICOLOR="$DATA_HOME/icons/hicolor"
+if [[ ! -f "$HICOLOR/index.theme" && -f /usr/share/icons/hicolor/index.theme ]]; then
+    install -m 0644 /usr/share/icons/hicolor/index.theme "$HICOLOR/index.theme"
+    echo "  icon theme -> $HICOLOR/index.theme (added)"
+fi
 
 sed "s|@EXEC@|$BIN|g" "$SRC/packaging/datamonitor.desktop" \
     > "$APPLICATIONS_DIR/$APP_ID.desktop"
@@ -121,6 +128,14 @@ command -v update-desktop-database >/dev/null && \
     update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null && \
     gtk-update-icon-cache -q -t "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
+# KDE (Kickoff / KRunner / taskbar): reindex desktop entries immediately so the
+# new entry shows up without waiting for the shell's directory watcher.
+for kb in kbuildsycoca6 kbuildsycoca5; do
+    if command -v "$kb" >/dev/null; then
+        "$kb" >/dev/null 2>&1 || true
+        break
+    fi
+done
 
 # --------------------------------------------------------------------------
 # 6. start at login
