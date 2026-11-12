@@ -372,10 +372,186 @@ def _kde_rgb_from_hex(value: str):
     return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
 
 
+# ---------------------------------------------------------------------------
+# KDE window buttons
+#
+# On Plasma the GTK window buttons would otherwise be libadwaita's grey
+# circles. When KWin uses an Aurorae (SVG) decoration we render that theme's
+# close/minimize/maximize/restore images ourselves, so the buttons match the
+# KWin title bars without relying on ~/.config/gtk-4.0 (which theme tools
+# like to rewrite). Native decorations such as Breeze have no SVGs to borrow;
+# the buttons are then left alone.
+# ---------------------------------------------------------------------------
+
+_BUTTON_STATES = (
+    # (GTK state suffix, CSS pseudo-class, Aurorae element)
+    ("normal", "", "active-center"),
+    ("backdrop", ":backdrop", "inactive-center"),
+    ("hover", ":hover", "hover-center"),
+    ("active", ":active", "pressed-center"),
+)
+_RENDER_SCALE = 3  # stay crisp on HiDPI screens
+
+
+def _kwinrc_path() -> str:
+    return os.path.join(os.path.dirname(_kdeglobals_path()), "kwinrc")
+
+
+def aurorae_theme_name(sections: dict):
+    """Name of the active Aurorae theme from a parsed kwinrc, else None."""
+    deco = sections.get("org.kde.kdecoration2", {})
+    library = deco.get("library", "org.kde.kwin.aurorae")
+    if library != "org.kde.kwin.aurorae":
+        return None
+    theme = deco.get("theme", "")
+    prefix = "__aurorae__svg__"
+    if theme.startswith(prefix):
+        return theme[len(prefix):] or None
+    return None
+
+
+def _aurorae_theme_dir(name: str):
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share"
+    )
+    data_dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    for base in [data_home] + data_dirs.split(":"):
+        if not base:
+            continue
+        path = os.path.join(base, "aurorae", "themes", name)
+        if os.path.isdir(path):
+            return path
+    return None
+
+
+def _aurorae_button_size(theme_dir: str, name: str) -> tuple:
+    width = height = 16
+    try:
+        with open(os.path.join(theme_dir, name + "rc"), encoding="utf-8",
+                  errors="replace") as fh:
+            layout = parse_kdeglobals(fh.read()).get("Layout", {})
+        width = int(layout.get("ButtonWidth", width))
+        height = int(layout.get("ButtonHeight", height))
+    except (OSError, ValueError):
+        pass
+    clamp = lambda v: max(10, min(28, v))  # noqa: E731
+    return clamp(width), clamp(height)
+
+
+def _render_aurorae_buttons(theme_dir: str, out_dir: str, size: tuple) -> dict:
+    """Render button states to PNGs; returns {(button, state): path}."""
+    try:
+        import cairo
+
+        gi.require_version("Rsvg", "2.0")
+        from gi.repository import Rsvg
+    except (ImportError, ValueError):
+        return {}
+
+    os.makedirs(out_dir, exist_ok=True)
+    px_w, px_h = size[0] * _RENDER_SCALE, size[1] * _RENDER_SCALE
+    rendered = {}
+    for button in ("close", "minimize", "maximize", "restore"):
+        svg = None
+        for ext in (".svg", ".svgz"):
+            candidate = os.path.join(theme_dir, button + ext)
+            if os.path.isfile(candidate):
+                svg = candidate
+                break
+        if svg is None:
+            continue
+        try:
+            handle = Rsvg.Handle.new_from_file(svg)
+        except Exception:
+            continue
+        for state, _pseudo, element in _BUTTON_STATES:
+            if not handle.has_sub("#" + element):
+                element = "active-center"
+                if not handle.has_sub("#" + element):
+                    break
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, px_w, px_h)
+            viewport = Rsvg.Rectangle()
+            viewport.x, viewport.y = 0, 0
+            viewport.width, viewport.height = px_w, px_h
+            try:
+                handle.render_element(cairo.Context(surface), "#" + element, viewport)
+            except Exception:
+                break
+            path = os.path.join(out_dir, f"{button}-{state}.png")
+            surface.write_to_png(path)
+            rendered[(button, state)] = path
+    return rendered
+
+
+def titlebutton_css(images: dict, size: tuple) -> str:
+    """CSS that paints window buttons with pre-rendered images."""
+    from gi.repository import GLib
+
+    def url(path):
+        return GLib.filename_to_uri(path, None)
+
+    lines = []
+    for button in ("close", "minimize", "maximize"):
+        if (button, "normal") not in images:
+            continue
+        for state, pseudo, _element in _BUTTON_STATES:
+            path = images.get((button, state))
+            if path is None:
+                continue
+            rule = f'background-image: url("{url(path)}");'
+            if not pseudo:
+                rule += (
+                    f" background-size: {size[0]}px {size[1]}px;"
+                    " background-repeat: no-repeat;"
+                    " background-position: center;"
+                    " background-color: transparent; box-shadow: none;"
+                )
+            lines.append(f"windowcontrols > button.{button}{pseudo} {{ {rule} }}")
+            restore = images.get(("restore", state))
+            if button == "maximize" and restore is not None:
+                lines.append(
+                    f"window.maximized windowcontrols > button.maximize{pseudo}"
+                    f' {{ background-image: url("{url(restore)}"); }}'
+                )
+    if not lines:
+        return ""
+    # Hide libadwaita's symbolic glyphs; the images carry their own.
+    lines.append(
+        "windowcontrols > button.close > image,"
+        " windowcontrols > button.minimize > image,"
+        " windowcontrols > button.maximize > image { opacity: 0; }"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _load_kde_titlebuttons() -> str:
+    try:
+        with open(_kwinrc_path(), encoding="utf-8", errors="replace") as fh:
+            name = aurorae_theme_name(parse_kdeglobals(fh.read()))
+    except OSError:
+        return ""
+    if not name or "/" in name or name.startswith("."):
+        return ""
+    theme_dir = _aurorae_theme_dir(name)
+    if theme_dir is None:
+        return ""
+    from gi.repository import GLib
+
+    size = _aurorae_button_size(theme_dir, name)
+    out_dir = os.path.join(
+        GLib.get_user_cache_dir(), "datamonitor", "titlebuttons", name
+    )
+    try:
+        images = _render_aurorae_buttons(theme_dir, out_dir, size)
+    except OSError:
+        return ""
+    return titlebutton_css(images, size)
+
+
 def refresh_kde_colors(*_args) -> None:
     if _kde_provider is None:
         return
-    css = _load_kde_colors()
+    css = _load_kde_colors() + _load_kde_titlebuttons()
     loader = getattr(_kde_provider, "load_from_string", None)
     if loader is not None:
         loader(css)
@@ -422,13 +598,16 @@ def install_kde_colors(display=None) -> bool:
         Adw.StyleManager.get_default().connect("notify::dark", refresh_kde_colors)
     except Exception:  # pragma: no cover
         pass
+    _kde_monitor = []
     try:
         from gi.repository import Gio
 
-        _kde_monitor = Gio.File.new_for_path(_kdeglobals_path()).monitor_file(
-            Gio.FileMonitorFlags.WATCH_MOVES, None
-        )
-        _kde_monitor.connect("changed", _on_kdeglobals_changed)
+        for path in (_kdeglobals_path(), _kwinrc_path()):
+            monitor = Gio.File.new_for_path(path).monitor_file(
+                Gio.FileMonitorFlags.WATCH_MOVES, None
+            )
+            monitor.connect("changed", _on_kdeglobals_changed)
+            _kde_monitor.append(monitor)
     except Exception:  # pragma: no cover - no live updates, colours still set
-        _kde_monitor = None
+        pass
     return True

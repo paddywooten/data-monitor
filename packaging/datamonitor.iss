@@ -4,7 +4,7 @@
 ; build-windows.bat passes the version from datamonitor/__init__.py.
 
 #ifndef MyAppVersion
-#define MyAppVersion "1.3.1"
+#define MyAppVersion "1.3.2"
 #endif
 #define MyAppName "Data Monitor"
 #define MyAppExeName "DataMonitor.exe"

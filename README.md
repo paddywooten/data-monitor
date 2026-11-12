@@ -28,7 +28,8 @@ weeks of history and warns you before you burn through a monthly quota.
 - **Background monitoring** — close the window and it keeps recording; run
   `datamonitor` again to bring the dashboard back.
 - **Starts at login** (optional), auto-dark/light following your desktop;
-  on KDE Plasma it also picks up your colour scheme and accent (live).
+  on KDE Plasma it also picks up your colour scheme, accent and (with an
+  Aurorae window decoration) the KWin title-bar buttons, live.
 
 Built with GTK 4 + libadwaita, so it looks native next to your other apps.
 
