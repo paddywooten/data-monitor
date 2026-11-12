@@ -27,7 +27,8 @@ weeks of history and warns you before you burn through a monthly quota.
   what counts toward your limits.
 - **Background monitoring** — close the window and it keeps recording; run
   `datamonitor` again to bring the dashboard back.
-- **Starts at login** (optional), auto-dark/light following your desktop.
+- **Starts at login** (optional), auto-dark/light following your desktop;
+  on KDE Plasma it also picks up your colour scheme and accent (live).
 
 Built with GTK 4 + libadwaita, so it looks native next to your other apps.
 

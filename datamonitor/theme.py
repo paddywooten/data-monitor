@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -172,3 +175,260 @@ def Gdk_display():
     from gi.repository import Gdk
 
     return Gdk.Display.get_default()
+
+
+# ---------------------------------------------------------------------------
+# KDE colour pickup
+#
+# libadwaita ignores GTK themes, so on Plasma the window would otherwise keep
+# GNOME's stock palette. When running under KDE we read the active colour
+# scheme from kdeglobals and map it onto libadwaita's named colours. The
+# provider sits at APPLICATION priority, so a user's ~/.config/gtk-4.0/gtk.css
+# (USER priority) still wins. Alpha channels are dropped: GTK cannot blur
+# what is behind the window, so translucent "glass" schemes would just show
+# the wallpaper through the UI.
+# ---------------------------------------------------------------------------
+
+_kde_provider = None
+_kde_monitor = None
+_kde_reload_id = 0
+
+
+def _kdeglobals_path() -> str:
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config"
+    )
+    return os.path.join(base, "kdeglobals")
+
+
+def _running_kde() -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "")
+    return "kde" in desktop.lower().split(":") or bool(
+        os.environ.get("KDE_FULL_SESSION")
+    )
+
+
+def parse_kdeglobals(text: str) -> dict:
+    """Parse kdeglobals into {section: {key: value}}.
+
+    Section headers such as ``[Colors:Header][Inactive]`` are kept verbatim
+    (minus the outer brackets) as ``Colors:Header][Inactive``.
+    """
+    sections: dict = {}
+    current = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = sections.setdefault(line[1:-1], {})
+            continue
+        if current is None or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        current[key.strip()] = value.strip()
+    return sections
+
+
+def _kde_rgb(value):
+    """'r,g,b[,a]' -> (r, g, b) ints, or None if unparseable."""
+    if not value:
+        return None
+    parts = value.split(",")
+    if len(parts) < 3:
+        return None
+    try:
+        rgb = tuple(max(0, min(255, int(p.strip()))) for p in parts[:3])
+    except ValueError:
+        return None
+    return rgb
+
+
+def _hex(rgb) -> str:
+    return "#%02x%02x%02x" % rgb
+
+
+def _luminance(rgb) -> float:
+    def channel(c):
+        c = c / 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def kde_colors(sections: dict) -> dict:
+    """Map a parsed kdeglobals onto libadwaita named colours (hex strings).
+
+    Returns an empty dict when the file lacks a usable window colour.
+    """
+
+    def get(section, key):
+        return _kde_rgb(sections.get(section, {}).get(key))
+
+    window_bg = get("Colors:Window", "BackgroundNormal")
+    window_fg = get("Colors:Window", "ForegroundNormal")
+    if window_bg is None or window_fg is None:
+        return {}
+
+    view_bg = get("Colors:View", "BackgroundNormal") or window_bg
+    view_fg = get("Colors:View", "ForegroundNormal") or window_fg
+    header_bg = (
+        get("Colors:Header", "BackgroundNormal")
+        or get("WM", "activeBackground")
+        or window_bg
+    )
+    header_fg = (
+        get("Colors:Header", "ForegroundNormal")
+        or get("WM", "activeForeground")
+        or window_fg
+    )
+    header_backdrop = (
+        get("Colors:Header][Inactive", "BackgroundNormal")
+        or get("WM", "inactiveBackground")
+        or header_bg
+    )
+    alt_bg = get("Colors:Window", "BackgroundAlternate") or window_bg
+    accent = (
+        get("General", "AccentColor")
+        or get("Colors:Selection", "BackgroundNormal")
+        or get("Colors:View", "DecorationFocus")
+    )
+
+    colors = {
+        "window_bg_color": window_bg,
+        "window_fg_color": window_fg,
+        "view_bg_color": view_bg,
+        "view_fg_color": view_fg,
+        "headerbar_bg_color": header_bg,
+        "headerbar_fg_color": header_fg,
+        "headerbar_backdrop_color": header_backdrop,
+        "sidebar_bg_color": alt_bg,
+        "sidebar_fg_color": window_fg,
+        "dialog_bg_color": window_bg,
+        "dialog_fg_color": window_fg,
+        "popover_bg_color": alt_bg,
+        "popover_fg_color": window_fg,
+    }
+    if accent is not None:
+        colors["accent_bg_color"] = accent
+        colors["accent_color"] = accent
+        colors["accent_fg_color"] = (
+            (0, 0, 0) if _luminance(accent) > 0.45 else (255, 255, 255)
+        )
+    for name, key in (
+        ("success_color", "ForegroundPositive"),
+        ("warning_color", "ForegroundNeutral"),
+        ("error_color", "ForegroundNegative"),
+    ):
+        rgb = get("Colors:Window", key)
+        if rgb is not None:
+            colors[name] = rgb
+    negative = get("Colors:Window", "ForegroundNegative")
+    if negative is not None:
+        colors["destructive_bg_color"] = negative
+        colors["destructive_color"] = negative
+    return {name: _hex(rgb) for name, rgb in colors.items()}
+
+
+def kde_css(colors: dict) -> str:
+    if not colors:
+        return ""
+    lines = [f"@define-color {name} {value};" for name, value in colors.items()]
+    # The header sits in an Adw.ToolbarView, which draws top bars flat (window
+    # colour); give it the KDE header colour like Plasma apps have.
+    lines.append(
+        "toolbarview > .top-bar {"
+        " background-color: @headerbar_bg_color;"
+        " color: @headerbar_fg_color; }"
+    )
+    lines.append(
+        "toolbarview > .top-bar:backdrop {"
+        " background-color: @headerbar_backdrop_color; }"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _load_kde_colors() -> str:
+    try:
+        with open(_kdeglobals_path(), encoding="utf-8", errors="replace") as fh:
+            colors = kde_colors(parse_kdeglobals(fh.read()))
+    except OSError:
+        return ""
+    if not colors:
+        return ""
+    # Only apply when the KDE scheme agrees with libadwaita's light/dark state
+    # (e.g. the user forced Light in Preferences while Plasma is dark).
+    window_dark = _luminance(_kde_rgb_from_hex(colors["window_bg_color"])) < 0.5
+    if window_dark != is_dark():
+        return ""
+    return kde_css(colors)
+
+
+def _kde_rgb_from_hex(value: str):
+    value = value.lstrip("#")
+    return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def refresh_kde_colors(*_args) -> None:
+    if _kde_provider is None:
+        return
+    css = _load_kde_colors()
+    loader = getattr(_kde_provider, "load_from_string", None)
+    if loader is not None:
+        loader(css)
+    else:  # pragma: no cover - older GTK
+        _kde_provider.load_from_data(css.encode("utf-8"))
+
+
+def _on_kdeglobals_changed(*_args) -> None:
+    global _kde_reload_id
+    from gi.repository import GLib
+
+    # Plasma rewrites the file in several steps; reload once it settles.
+    if _kde_reload_id:
+        GLib.source_remove(_kde_reload_id)
+
+    def reload():
+        global _kde_reload_id
+        _kde_reload_id = 0
+        refresh_kde_colors()
+        return False
+
+    _kde_reload_id = GLib.timeout_add(300, reload)
+
+
+def install_kde_colors(display=None) -> bool:
+    """Follow the KDE colour scheme when running on Plasma.
+
+    Returns True when KDE pickup is active. No-op elsewhere.
+    """
+    global _kde_provider, _kde_monitor
+    if _kde_provider is not None:
+        return True
+    if not _running_kde():
+        return False
+    display = display or Gdk_display()
+    _kde_provider = Gtk.CssProvider()
+    refresh_kde_colors()
+    Gtk.StyleContext.add_provider_for_display(
+        display,
+        _kde_provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+    )
+    try:
+        Adw.StyleManager.get_default().connect("notify::dark", refresh_kde_colors)
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        from gi.repository import Gio
+
+        _kde_monitor = Gio.File.new_for_path(_kdeglobals_path()).monitor_file(
+            Gio.FileMonitorFlags.WATCH_MOVES, None
+        )
+        _kde_monitor.connect("changed", _on_kdeglobals_changed)
+    except Exception:  # pragma: no cover - no live updates, colours still set
+        _kde_monitor = None
+    return True

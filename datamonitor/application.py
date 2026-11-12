@@ -132,6 +132,7 @@ class DataMonitorApp(Adw.Application):
         Adw.Application.do_startup(self)
         theme.install_css()
         theme.apply_color_scheme(self.config.color_scheme)
+        theme.install_kde_colors()
         # Not built into GLib on Windows; Ctrl+C in a console is rare there.
         if hasattr(GLib, "unix_signal_add"):
             for signum in (signal.SIGINT, signal.SIGTERM):

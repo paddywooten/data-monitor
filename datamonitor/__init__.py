@@ -14,4 +14,4 @@ quotas and the overall cap.
 
 APP_NAME = "Data Monitor"
 APP_ID = "io.datamonitor.App"
-__version__ = "1.3.0"
+__version__ = "1.3.1"
