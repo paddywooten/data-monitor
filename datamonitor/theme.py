@@ -275,29 +275,26 @@ def _luminance(rgb) -> float:
 
 
 # Glass translucency used when the colour scheme itself is opaque.
-_GLASS_DEFAULT = {"window_bg_color": 165, "view_bg_color": 214}
+_GLASS_DEFAULT = {"window_bg_color": 165}
 
 # libadwaita's stock backgrounds, for glass when the KDE palette is not used
 # (the app's forced light/dark disagrees with the Plasma scheme).
 _ADW_STOCK = {
-    True: {"window_bg_color": "#222226", "view_bg_color": "#1d1d20"},
-    False: {"window_bg_color": "#fafafb", "view_bg_color": "#ffffff"},
+    True: {"window_bg_color": "#222226"},
+    False: {"window_bg_color": "#fafafb"},
 }
 
 
 def kde_glass_alphas(sections: dict) -> dict:
-    """Window translucency: {named colour: alpha 0-255}.
+    """Title-bar glass translucency: {named colour: alpha 0-255}.
 
     Glass is always on under Plasma. A translucent ("glass") scheme supplies
-    its own alpha values; opaque schemes get _GLASS_DEFAULT. Only the window
-    and content backgrounds are translucent; popovers and dialogs have no
-    blur behind them and stay opaque.
+    its own alpha; opaque schemes get _GLASS_DEFAULT. Only the window
+    background behind the header bar is translucent: page content, popovers
+    and dialogs stay opaque so text remains easy to read.
     """
     alphas = {}
-    for name, section in (
-        ("window_bg_color", "Colors:Window"),
-        ("view_bg_color", "Colors:View"),
-    ):
+    for name, section in (("window_bg_color", "Colors:Window"),):
         alpha = _kde_alpha(sections.get(section, {}).get("BackgroundNormal"))
         alphas[name] = alpha if alpha < 255 else _GLASS_DEFAULT[name]
     return alphas
@@ -385,22 +382,27 @@ def kde_css(colors: dict, glass: dict = None, palette: bool = True) -> str:
         return ""
     glass = glass or {}
     lines = []
-    for name, value in colors.items():
-        if name in glass:
-            value = _rgba(_kde_rgb_from_hex(value), glass[name])
-        lines.append(f"@define-color {name} {value};")
-    if glass and not palette:
-        lines.append("window { backdrop-filter: blur(30px); }")
-        lines.append("toolbarview > .top-bar { background-color: transparent; }")
-    elif glass:
-        # GTK >= 4.24 turns a window backdrop-filter into an
-        # ext-background-effect blur request; KWin applies its own strength.
-        lines.append("window { backdrop-filter: blur(30px); }")
-        # The translucent window background already covers the header; a
-        # second translucent layer on top would just make it darker.
+    if palette:
+        lines += [f"@define-color {name} {value};" for name, value in colors.items()]
+    if glass:
+        alpha = glass.get("window_bg_color", _GLASS_DEFAULT["window_bg_color"])
+        tint = _rgba(_kde_rgb_from_hex(colors["window_bg_color"]), alpha)
+        # Only the window background is translucent. GTK >= 4.24 turns a
+        # window backdrop-filter into an ext-background-effect blur request;
+        # KWin applies its own blur strength.
         lines.append(
-            "toolbarview > .top-bar { background-color: transparent;"
-            " color: @headerbar_fg_color; }"
+            f"window.background {{ background-color: {tint};"
+            " backdrop-filter: blur(30px); }"
+        )
+        # The header lets the glass through...
+        header = "toolbarview > .top-bar { background-color: transparent;"
+        if palette:
+            header += " color: @headerbar_fg_color;"
+        lines.append(header + " }")
+        # ...while page content stays solid so it is easy to read.
+        lines.append(
+            "toolbarview > :not(.top-bar):not(.bottom-bar) {"
+            " background-color: @window_bg_color; }"
         )
     else:
         # The header sits in an Adw.ToolbarView, which draws top bars flat

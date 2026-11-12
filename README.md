@@ -30,7 +30,8 @@ weeks of history and warns you before you burn through a monthly quota.
 - **Starts at login** (optional), auto-dark/light following your desktop;
   on KDE Plasma it also picks up your colour scheme, accent and (with an
   Aurorae window decoration) the KWin title-bar buttons and their spacing,
-  live, and draws the window as blurred glass (GTK 4.24+ on Wayland).
+  live, and draws the title bar as blurred glass (GTK 4.24+ on Wayland)
+  while page content stays solid for readability.
 
 Built with GTK 4 + libadwaita, so it looks native next to your other apps.
 
