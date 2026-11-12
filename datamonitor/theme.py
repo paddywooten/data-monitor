@@ -485,7 +485,8 @@ def aurorae_theme_name(sections: dict):
     """Name of the active Aurorae theme from a parsed kwinrc, else None."""
     deco = sections.get("org.kde.kdecoration2", {})
     library = deco.get("library", "org.kde.kwin.aurorae")
-    if library != "org.kde.kwin.aurorae":
+    # Newer Plasma ships the plugin as org.kde.kwin.aurorae.v2 (same themes).
+    if library.split(".v")[0] != "org.kde.kwin.aurorae":
         return None
     theme = deco.get("theme", "")
     prefix = "__aurorae__svg__"
