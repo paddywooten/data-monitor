@@ -246,8 +246,23 @@ def _kde_rgb(value):
     return rgb
 
 
+def _kde_alpha(value) -> int:
+    """Alpha channel of 'r,g,b[,a]' (255 when absent or unparseable)."""
+    parts = (value or "").split(",")
+    if len(parts) < 4:
+        return 255
+    try:
+        return max(0, min(255, int(parts[3].strip())))
+    except ValueError:
+        return 255
+
+
 def _hex(rgb) -> str:
     return "#%02x%02x%02x" % rgb
+
+
+def _rgba(rgb, alpha: int) -> str:
+    return "rgba(%d,%d,%d,%.3f)" % (rgb[0], rgb[1], rgb[2], alpha / 255.0)
 
 
 def _luminance(rgb) -> float:
@@ -257,6 +272,35 @@ def _luminance(rgb) -> float:
 
     r, g, b = (channel(c) for c in rgb)
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+# Glass translucency used when the colour scheme itself is opaque.
+_GLASS_DEFAULT = {"window_bg_color": 165, "view_bg_color": 214}
+
+# libadwaita's stock backgrounds, for glass when the KDE palette is not used
+# (the app's forced light/dark disagrees with the Plasma scheme).
+_ADW_STOCK = {
+    True: {"window_bg_color": "#222226", "view_bg_color": "#1d1d20"},
+    False: {"window_bg_color": "#fafafb", "view_bg_color": "#ffffff"},
+}
+
+
+def kde_glass_alphas(sections: dict) -> dict:
+    """Window translucency: {named colour: alpha 0-255}.
+
+    Glass is always on under Plasma. A translucent ("glass") scheme supplies
+    its own alpha values; opaque schemes get _GLASS_DEFAULT. Only the window
+    and content backgrounds are translucent; popovers and dialogs have no
+    blur behind them and stay opaque.
+    """
+    alphas = {}
+    for name, section in (
+        ("window_bg_color", "Colors:Window"),
+        ("view_bg_color", "Colors:View"),
+    ):
+        alpha = _kde_alpha(sections.get(section, {}).get("BackgroundNormal"))
+        alphas[name] = alpha if alpha < 255 else _GLASS_DEFAULT[name]
+    return alphas
 
 
 def kde_colors(sections: dict) -> dict:
@@ -333,38 +377,76 @@ def kde_colors(sections: dict) -> dict:
     return {name: _hex(rgb) for name, rgb in colors.items()}
 
 
-def kde_css(colors: dict) -> str:
+def kde_css(colors: dict, glass: dict = None, palette: bool = True) -> str:
+    """CSS for the KDE palette; ``glass`` maps colour names to alpha values
+    and switches on compositor blur behind the window. ``palette=False``
+    means ``colors`` are libadwaita's own and only glass is applied."""
     if not colors:
         return ""
-    lines = [f"@define-color {name} {value};" for name, value in colors.items()]
-    # The header sits in an Adw.ToolbarView, which draws top bars flat (window
-    # colour); give it the KDE header colour like Plasma apps have.
-    lines.append(
-        "toolbarview > .top-bar {"
-        " background-color: @headerbar_bg_color;"
-        " color: @headerbar_fg_color; }"
-    )
-    lines.append(
-        "toolbarview > .top-bar:backdrop {"
-        " background-color: @headerbar_backdrop_color; }"
-    )
+    glass = glass or {}
+    lines = []
+    for name, value in colors.items():
+        if name in glass:
+            value = _rgba(_kde_rgb_from_hex(value), glass[name])
+        lines.append(f"@define-color {name} {value};")
+    if glass and not palette:
+        lines.append("window { backdrop-filter: blur(30px); }")
+        lines.append("toolbarview > .top-bar { background-color: transparent; }")
+    elif glass:
+        # GTK >= 4.24 turns a window backdrop-filter into an
+        # ext-background-effect blur request; KWin applies its own strength.
+        lines.append("window { backdrop-filter: blur(30px); }")
+        # The translucent window background already covers the header; a
+        # second translucent layer on top would just make it darker.
+        lines.append(
+            "toolbarview > .top-bar { background-color: transparent;"
+            " color: @headerbar_fg_color; }"
+        )
+    else:
+        # The header sits in an Adw.ToolbarView, which draws top bars flat
+        # (window colour); give it the KDE header colour like Plasma apps.
+        lines.append(
+            "toolbarview > .top-bar {"
+            " background-color: @headerbar_bg_color;"
+            " color: @headerbar_fg_color; }"
+        )
+        lines.append(
+            "toolbarview > .top-bar:backdrop {"
+            " background-color: @headerbar_backdrop_color; }"
+        )
     return "\n".join(lines) + "\n"
+
+
+def _glass_supported() -> bool:
+    """Compositor blur needs GTK 4.24 (ext-background-effect) on Wayland."""
+    if (Gtk.get_major_version(), Gtk.get_minor_version()) < (4, 24):
+        return False
+    display = Gdk_display()
+    return display is not None and "Wayland" in type(display).__name__
 
 
 def _load_kde_colors() -> str:
     try:
         with open(_kdeglobals_path(), encoding="utf-8", errors="replace") as fh:
-            colors = kde_colors(parse_kdeglobals(fh.read()))
+            sections = parse_kdeglobals(fh.read())
     except OSError:
         return ""
+    colors = kde_colors(sections)
+    glass = kde_glass_alphas(sections) if _glass_supported() else {}
+    # Only use the KDE palette when it agrees with libadwaita's light/dark
+    # state (e.g. the user forced Light in Preferences while Plasma is dark);
+    # otherwise keep libadwaita's colours, still as glass.
+    if colors:
+        window_dark = (
+            _luminance(_kde_rgb_from_hex(colors["window_bg_color"])) < 0.5
+        )
+        if window_dark != is_dark():
+            colors = {}
     if not colors:
-        return ""
-    # Only apply when the KDE scheme agrees with libadwaita's light/dark state
-    # (e.g. the user forced Light in Preferences while Plasma is dark).
-    window_dark = _luminance(_kde_rgb_from_hex(colors["window_bg_color"])) < 0.5
-    if window_dark != is_dark():
-        return ""
-    return kde_css(colors)
+        if not glass:
+            return ""
+        return kde_css(dict(_ADW_STOCK[is_dark()]), glass, palette=False)
+    return kde_css(colors, glass)
 
 
 def _kde_rgb_from_hex(value: str):
@@ -425,17 +507,26 @@ def _aurorae_theme_dir(name: str):
 
 
 def _aurorae_button_size(theme_dir: str, name: str) -> tuple:
+    """(width, height, spacing, edge_left, edge_right) of the theme's
+    title-bar buttons."""
     width = height = 16
+    spacing = 4
+    edge_left = edge_right = 6
     try:
         with open(os.path.join(theme_dir, name + "rc"), encoding="utf-8",
                   errors="replace") as fh:
             layout = parse_kdeglobals(fh.read()).get("Layout", {})
         width = int(layout.get("ButtonWidth", width))
         height = int(layout.get("ButtonHeight", height))
+        spacing = int(layout.get("ButtonSpacing", spacing))
+        edge_left = int(layout.get("TitleEdgeLeft", edge_left))
+        edge_right = int(layout.get("TitleEdgeRight", edge_right))
     except (OSError, ValueError):
         pass
     clamp = lambda v: max(10, min(28, v))  # noqa: E731
-    return clamp(width), clamp(height)
+    edge = lambda v: max(0, min(40, v))  # noqa: E731
+    return (clamp(width), clamp(height), max(0, min(24, spacing)),
+            edge(edge_left), edge(edge_right))
 
 
 def _render_aurorae_buttons(theme_dir: str, out_dir: str, size: tuple) -> dict:
@@ -515,11 +606,33 @@ def titlebutton_css(images: dict, size: tuple) -> str:
                 )
     if not lines:
         return ""
-    # Hide libadwaita's symbolic glyphs; the images carry their own.
+    buttons = (
+        "windowcontrols > button.close, windowcontrols > button.minimize,"
+        " windowcontrols > button.maximize"
+    )
+    # Same size and gaps as the KWin title-bar buttons (libadwaita's are
+    # 24px circles with their own spacing).
+    lines.append(
+        f"{buttons} {{ min-width: {size[0]}px; min-height: {size[1]}px;"
+        " padding: 0; margin: 0; border-radius: 0; }"
+    )
+    lines.append(f"windowcontrols {{ border-spacing: {size[2]}px; }}")
+    # KWin puts the first button TitleEdgeLeft/Right px from the window edge;
+    # the header bar already pads 6px.
+    lines.append(
+        f"windowcontrols.start {{ margin-left: {max(0, size[3] - 6)}px; }}"
+    )
+    lines.append(
+        f"windowcontrols.end {{ margin-right: {max(0, size[4] - 6)}px; }}"
+    )
+    # Hide libadwaita's symbolic glyphs (the images carry their own) and stop
+    # their padding from widening the buttons past the theme size.
     lines.append(
         "windowcontrols > button.close > image,"
         " windowcontrols > button.minimize > image,"
-        " windowcontrols > button.maximize > image { opacity: 0; }"
+        " windowcontrols > button.maximize > image {"
+        " opacity: 0; padding: 0; margin: 0; min-width: 0; min-height: 0;"
+        " -gtk-icon-size: 8px; }"
     )
     return "\n".join(lines) + "\n"
 

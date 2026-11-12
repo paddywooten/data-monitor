@@ -29,7 +29,8 @@ weeks of history and warns you before you burn through a monthly quota.
   `datamonitor` again to bring the dashboard back.
 - **Starts at login** (optional), auto-dark/light following your desktop;
   on KDE Plasma it also picks up your colour scheme, accent and (with an
-  Aurorae window decoration) the KWin title-bar buttons, live.
+  Aurorae window decoration) the KWin title-bar buttons and their spacing,
+  live, and draws the window as blurred glass (GTK 4.24+ on Wayland).
 
 Built with GTK 4 + libadwaita, so it looks native next to your other apps.
 
